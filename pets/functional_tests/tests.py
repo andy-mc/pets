@@ -4,6 +4,7 @@ from datetime import datetime
 from django.conf import settings
 from django.contrib.staticfiles.testing import StaticLiveServerTestCase
 
+from decouple import config
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.select import Select
@@ -36,7 +37,22 @@ class SiteTestCases(StaticLiveServerTestCase):
         user.save()
         self.test_city, _ = City.objects.get_or_create(city='Araras')
         Kind.objects.create(kind='Cats')
-        self.browser = webdriver.PhantomJS()
+
+        travis_job = config('TRAVIS_JOB_NUMBER', default='')
+        if travis_job:
+            username = 'dirtycoder'
+            access_key = 'cff38549-0730-4864-ae0a-337320a3b98e'
+            capabilities = {'browserName': 'firefox'}
+            capabilities["tunnel-identifier"] = config('TRAVIS_JOB_NUMBER')
+            capabilities["build"] = config('TRAVIS_BUILD_NUMBER')
+            hub_url = "%s:%s@localhost:4445" % (username, access_key)
+            self.browser = webdriver.Remote(
+                desired_capabilities=capabilities,
+                command_executor="http://%s/wd/hub" % hub_url
+            )
+        else:
+            self.browser = webdriver.Firefox()
+
         self.browser.implicitly_wait(1)
         self.browser.maximize_window()
 

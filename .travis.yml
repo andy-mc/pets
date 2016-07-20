@@ -1,6 +1,9 @@
 language: python
 addons:
   postgresql: "9.4"
+  sauce_connect:
+    username: "dirtycoder"
+    access_key: "cff38549-0730-4864-ae0a-337320a3b98e"
 services:
   - postgresql
 python:
