@@ -2,8 +2,9 @@ from django.core.exceptions import ValidationError
 from django.core.urlresolvers import reverse
 from django.test import TestCase
 
-from .models import OwnerProfile
+from users.forms import RegisterForm, UpdateUserForm
 from users.validators import validate_facebook_url
+from .models import OwnerProfile
 
 
 class UserRegistrationTest(TestCase):
@@ -13,7 +14,7 @@ class UserRegistrationTest(TestCase):
 
     def create_user(self, username='tester'):
         user = OwnerProfile(first_name='Test First Name', last_name='Tester', email='te@ste.com',
-                            username=username)
+                            username=username, is_information_confirmed=True)
         user.set_password('test123')
         user.save()
         return user
@@ -106,7 +107,7 @@ class UserRegistrationTest(TestCase):
             follow=True
         )
         self.assertTemplateUsed(response, 'users/login.html')
-        self.assertContains(response, 'alert-danger')
+        self.assertContains(response, 'nonfield')
 
     def test_user_account_without_social_login_should_be_confirmed_by_default(self):
         self.client.post(
@@ -147,8 +148,8 @@ class UserRegistrationTest(TestCase):
         response_without_url = self.client.get(user_without_url.get_absolute_url())
         response_with_url = self.client.get(user_with_url.get_absolute_url())
 
-        self.assertContains(response_without_url, 'Facebook', 1)
-        self.assertContains(response_with_url, 'Facebook', 2)
+        self.assertContains(response_without_url, 'Facebook', 0)
+        self.assertContains(response_with_url, 'Facebook', 1)
 
     def test_only_logged_user_can_edit_profile(self):
         edit_url = reverse('users:edit')
@@ -158,3 +159,86 @@ class UserRegistrationTest(TestCase):
 
         self.assertTemplateUsed(response, 'users/login.html')
         self.assertRedirects(response, redirect_url)
+
+    def test_redirect_logged_user_to_next(self):
+        self.create_user()
+        url = '{}?next={}'.format(reverse('users:login'), reverse('meupet:register'))
+
+        response = self.client.post(
+            url, {
+                'username': 'tester',
+                'password': 'test123',
+            },
+            follow=True
+        )
+
+        self.assertRedirects(response, reverse('meupet:register'))
+
+    def test_logged_user_cant_create_account(self):
+        """Authenticated user must not access the form for account creation"""
+        self.login_new_user()
+        response = self.client.get(reverse('users:create'))
+
+        self.assertRedirects(response, reverse('meupet:index'))
+
+
+class UserDetailViewTest(TestCase):
+    def test_show_information_on_profile(self):
+        self.user = OwnerProfile.objects.create_user(
+            first_name='Test First Name',
+            last_name='Tester',
+            email='te@ste.com',
+            username='first_user',
+            is_information_confirmed=True,
+            phone='(99) 99999-9999'
+        )
+
+        self.resp = self.client.get(self.user.get_absolute_url())
+
+        contents = [
+            'Test First Name',
+            'Tester',
+            'te@ste.com',
+            '(99) 99999-9999'
+        ]
+
+        for expected in contents:
+            with self.subTest():
+                self.assertContains(self.resp, expected)
+
+
+class UserCreateViewTest(TestCase):
+    def test_show_form_inputs(self):
+        resp = self.client.get(reverse('users:create'))
+
+        contents = [
+            'name="first_name"',
+            'name="last_name"',
+            'name="email"',
+            'name="username"',
+            'name="facebook"',
+            'name="phone"',
+            'name="password1"',
+            'name="password2"',
+        ]
+
+        for expected in contents:
+            with self.subTest():
+                self.assertContains(resp, expected)
+
+
+class RegisterFormTest(TestCase):
+    def test_form_has_fields(self):
+        form = RegisterForm()
+        expected = ['first_name', 'last_name', 'email', 'username',
+                    'facebook', 'phone', 'password1', 'password2', ]
+
+        self.assertSequenceEqual(expected, list(form.fields))
+
+
+class UpdateUserFormTest(TestCase):
+    def test_form_has_fields(self):
+        form = UpdateUserForm()
+        expected = ['first_name', 'last_name', 'email', 'facebook', 'phone', ]
+
+        self.assertSequenceEqual(expected, list(form.fields))

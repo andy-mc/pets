@@ -1,37 +1,66 @@
-from braces.views import LoginRequiredMixin
 from django.contrib import messages
 from django.contrib.auth import authenticate, login, logout
-from django.core.urlresolvers import reverse
+from django.core.urlresolvers import reverse, reverse_lazy
 from django.http.response import HttpResponseRedirect
 from django.shortcuts import render_to_response
 from django.template.context import RequestContext
+from django.utils.http import is_safe_url
 from django.views.generic import CreateView, TemplateView, UpdateView, DetailView
 
-from common.views import get_kind_list, MeuPetEspecieMixin
-from users.forms import LoginForm, RegisterForm, UpdateUserForm
+from braces.views import LoginRequiredMixin, AnonymousRequiredMixin
+from password_reset.views import Recover, RecoverDone, Reset, ResetDone
+
+from users.forms import LoginForm, RegisterForm, UpdateUserForm, UsersPasswordRecoveryForm, UsersPasswordResetForm
 from users.models import OwnerProfile
 
 
-class CreateUserView(MeuPetEspecieMixin, CreateView):
+class RecoverView(Recover):
+    template_name = 'users/recover.html'
+    form_class = UsersPasswordRecoveryForm
+    success_url_name = 'users:recover_password_sent'
+    email_template_name = 'users/recover_email.txt'
+    search_fields = ['username', 'email']
+
+
+class RecoverDoneView(RecoverDone):
+    template_name = 'users/recover.html'
+
+
+class RecoverResetView(Reset):
+    template_name = 'users/reset.html'
+    success_url = 'users:recover_password_done'
+    form_class = UsersPasswordResetForm
+    token_expires = 3600 * 2
+
+
+class RecoverResetDoneView(ResetDone):
+    template_name = 'users/reset_done.html'
+
+
+class CreateUserView(AnonymousRequiredMixin, CreateView):
     model = OwnerProfile
     form_class = RegisterForm
     template_name = 'users/create.html'
+    authenticated_redirect_url = reverse_lazy('meupet:index')
+    msg = 'Sua conta foi criada com sucesso, acesse <a href="{0}">essa ' \
+          'página</a> e realize o cadastro do pet :)'
 
     def form_valid(self, form):
         form.instance.is_information_confirmed = True
         return super(CreateUserView, self).form_valid(form)
 
     def get_success_url(self):
-        messages.success(self.request, 'Conta criada com sucesso. Obrigado!')
+        url = reverse('meupet:register')
+        messages.success(self.request, self.msg.format(url))
         user = authenticate(
-            username=self.request.POST.get('username'),
-            password=self.request.POST.get('password1')
+                username=self.request.POST.get('username'),
+                password=self.request.POST.get('password1')
         )
         login(self.request, user)
         return reverse('meupet:index')
 
 
-class EditUserProfileView(MeuPetEspecieMixin, LoginRequiredMixin, UpdateView):
+class EditUserProfileView(LoginRequiredMixin, UpdateView):
     template_name = 'users/edit_profile.html'
     model = OwnerProfile
     form_class = UpdateUserForm
@@ -46,8 +75,8 @@ class EditUserProfileView(MeuPetEspecieMixin, LoginRequiredMixin, UpdateView):
 
 def user_login(request):
     context = RequestContext(request)
-    context['kind_lost'] = get_kind_list()
-    context['kind_adoption'] = get_kind_list()
+
+    redirect_to = request.POST.get('next', request.GET.get('next', ''))
 
     if request.method == 'POST':
         form = LoginForm(data=request.POST)
@@ -56,6 +85,10 @@ def user_login(request):
                                 password=form.data.get('password'))
             if user and user.is_active:
                 login(request, user)
+
+                if is_safe_url(redirect_to):
+                    return HttpResponseRedirect(redirect_to)
+
                 return HttpResponseRedirect(reverse('meupet:index'))
     else:
         form = LoginForm()
@@ -67,7 +100,7 @@ def user_logout(request):
     return HttpResponseRedirect(reverse('meupet:index'))
 
 
-class UserProfileView(MeuPetEspecieMixin, LoginRequiredMixin, TemplateView):
+class UserProfileView(LoginRequiredMixin, TemplateView):
     template_name = 'users/profile.html'
 
     def get_context_data(self, **kwargs):
@@ -77,7 +110,7 @@ class UserProfileView(MeuPetEspecieMixin, LoginRequiredMixin, TemplateView):
         return context
 
 
-class ProfileDetailView(MeuPetEspecieMixin, DetailView):
+class ProfileDetailView(DetailView):
     template_name = 'users/profile.html'
     model = OwnerProfile
 

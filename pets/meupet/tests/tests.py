@@ -1,46 +1,51 @@
 import shutil
 import tempfile
-from unittest.mock import MagicMock, patch
 
-from django.conf import settings
-from django.test import TestCase
 from django.core.urlresolvers import reverse
+from django.test import TestCase, override_settings
 
+from meupet import forms
 from meupet.models import Pet, Kind, Photo, City
-from meupet.management.commands.shareonfacebook import Command
+from meupet.views import paginate_pets
 from users.models import OwnerProfile
 
-
-def get_test_image_file(filename='test.png'):
-    from six import BytesIO
-    from PIL import Image
-    from django.core.files.images import ImageFile
-
-    f = BytesIO()
-    image = Image.new('RGB', (200, 200), 'white')
-    image.save(f, 'PNG')
-    return ImageFile(f, name=filename)
+MEDIA_ROOT = tempfile.mkdtemp()
 
 
-class MeuPetTest(TestCase):
+@override_settings(MEDIA_ROOT=MEDIA_ROOT)
+class MeuPetTestCase(TestCase):
     def setUp(self):
-        self._original_media_root = settings.MEDIA_ROOT
-        self._temp_media = tempfile.mkdtemp()
-        settings.MEDIA_ROOT = self._temp_media
         self.admin = OwnerProfile.objects.create_user(username='admin', password='admin')
         self.test_city, _ = City.objects.get_or_create(city='Testing City')
 
-    def tearDown(self):
-        shutil.rmtree(self._temp_media, ignore_errors=True)
-        settings.MEDIA_ROOT = self._original_media_root
+    @staticmethod
+    def get_test_image_file():
+        from django.core.files.images import ImageFile
+        file = tempfile.NamedTemporaryFile(suffix='.png')
+        return ImageFile(file, name=file.name)
 
     def create_pet(self, kind, name='Pet', status=Pet.MISSING, **kwargs):
-        image = get_test_image_file()
+        image = self.get_test_image_file()
         user = self.admin
         kind = Kind.objects.get_or_create(kind=kind)[0]
         return Pet.objects.create(name='Testing ' + name, description='Bla',
                                   profile_picture=image, owner=user, kind=kind,
                                   status=status, **kwargs)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(MEDIA_ROOT, ignore_errors=True)
+        super().tearDownClass()
+
+
+class MeuPetTest(MeuPetTestCase):
+    def test_titleize_name(self):
+        data = {
+            'name': 'TESTING NAME'
+        }
+        form = forms.PetForm(data=data)
+        form.is_valid()
+        self.assertEquals(form.cleaned_data['name'], 'Testing Name')
 
     def test_display_all_pets(self):
         self.create_pet('Goat', 'Goat')
@@ -52,6 +57,7 @@ class MeuPetTest(TestCase):
         self.assertContains(home, 'Testing Cat')
 
     def test_display_kinds_sidebar(self):
+        Kind.objects.get_or_create(kind='0 Pets')
         self.create_pet('Goat')
         self.create_pet('Cat')
 
@@ -59,6 +65,7 @@ class MeuPetTest(TestCase):
 
         self.assertContains(home, 'Goat')
         self.assertContains(home, 'Cat')
+        self.assertNotContains(home, '0 Pets')
 
     def test_display_only_pets_from_kind(self):
         self.create_pet('Goat', 'Goat')
@@ -81,13 +88,13 @@ class MeuPetTest(TestCase):
         response = self.client.get(pet.get_absolute_url())
 
         self.assertContains(response, 'Editar')
-        self.assertContains(response, reverse('meupet:edit', args=[pet.id]))
+        self.assertContains(response, reverse('meupet:edit', args=[pet.slug]))
 
     def test_load_data_for_editing_pet(self):
         pet = self.create_pet('Own Pet', 'Own Pet')
         self.client.login(username='admin', password='admin')
 
-        response = self.client.get(reverse('meupet:edit', args=[pet.id]))
+        response = self.client.get(reverse('meupet:edit', args=[pet.slug]))
 
         self.assertTemplateUsed(response, 'meupet/edit.html')
         self.assertContains(response, 'Testing Own Pet')
@@ -98,7 +105,7 @@ class MeuPetTest(TestCase):
         pet = self.create_pet('Own Pet')
         self.client.login(username='admin', password='admin')
 
-        response = self.client.post(reverse('meupet:delete_pet', args=[pet.id]), follow=True)
+        response = self.client.post(reverse('meupet:delete_pet', args=[pet.slug]), follow=True)
 
         self.assertTemplateUsed(response, 'meupet/index.html')
         self.assertNotContains(response, 'Testing Pet')
@@ -108,7 +115,7 @@ class MeuPetTest(TestCase):
         OwnerProfile.objects.create_user(username='other', password='user')
         self.client.login(username='other', password='user')
 
-        response = self.client.post(reverse('meupet:delete_pet', args=[pet.id]), follow=True)
+        response = self.client.post(reverse('meupet:delete_pet', args=[pet.slug]), follow=True)
 
         self.assertTemplateUsed(response, 'meupet/pet_detail.html')
         self.assertContains(response, 'Testing Pet')
@@ -119,7 +126,7 @@ class MeuPetTest(TestCase):
         self.client.login(username='admin', password='admin')
         url = Pet.objects.first().profile_picture.url
 
-        response_post = self.client.post(reverse('meupet:edit', args=[pet.id]),
+        response_post = self.client.post(reverse('meupet:edit', args=[pet.slug]),
                                          data={'name': 'Testing Fuzzy Boots',
                                                'description': 'My lovely cat',
                                                'city': self.test_city.id,
@@ -174,7 +181,7 @@ class MeuPetTest(TestCase):
         pet = self.create_pet('Own Pet')
         self.client.login(username='Other User', password='otherpass')
 
-        response = self.client.get(reverse('meupet:edit', args=[pet.id]))
+        response = self.client.get(reverse('meupet:edit', args=[pet.slug]))
 
         self.assertRedirects(response, pet.get_absolute_url())
 
@@ -227,7 +234,7 @@ class MeuPetTest(TestCase):
         self.assertContains(response, 'another_picture')
 
     def test_show_more_photos_in_pet_detail(self):
-        photo = Photo(image=get_test_image_file())
+        photo = Photo(image=self.get_test_image_file())
         pet = self.create_pet('Cat')
         pet.photo_set.add(photo)
         pet.save()
@@ -235,19 +242,6 @@ class MeuPetTest(TestCase):
         response = self.client.get(pet.get_absolute_url())
 
         self.assertContains(response, 'Outras fotos')
-
-    def test_search_pet(self):
-        self.create_pet('Cat', city=self.test_city, size=Pet.SMALL)
-
-        response_name = self.client.get(reverse('meupet:quick_search'), {'q': 'Testing'})
-        response_desc = self.client.get(reverse('meupet:quick_search'), {'q': 'bla'})
-        response_city = self.client.get(reverse('meupet:quick_search'), {'q': self.test_city})
-        response_size = self.client.get(reverse('meupet:quick_search'), {'q': 'Pequeno'})
-
-        self.assertContains(response_name, 'Testing Pet')
-        self.assertContains(response_desc, 'Testing Pet')
-        self.assertContains(response_city, self.test_city)
-        self.assertContains(response_size, 'Testing Pet')
 
     def test_show_city(self):
         pet = self.create_pet('Cat')
@@ -265,22 +259,10 @@ class MeuPetTest(TestCase):
 
         self.assertContains(response, 'Pequeno')
 
-    def test_empty_search_redirect_to_home(self):
-        response = self.client.get(reverse('meupet:quick_search'), {'q': ''})
-
-        self.assertRedirects(response, reverse('meupet:index'))
-
-    def test_invalid_size_key_shouldnt_return_pets_with_empty_size(self):
-        self.create_pet('Dog')
-
-        response = self.client.get(reverse('meupet:quick_search'), {'q': 'zzz'})
-
-        self.assertContains(response, 'Nenhum amiguinho')
-
     def test_custom_search_without_filters(self):
         response = self.client.post(reverse('meupet:search'), {})
 
-        self.assertRedirects(response, reverse('meupet:search'))
+        self.assertContains(response, 'É necessário selecionar ao menos um filtro')
 
     def test_custom_search_with_filter(self):
         pet = self.create_pet('Dog', city=self.test_city)
@@ -299,7 +281,7 @@ class MeuPetTest(TestCase):
 
     def test_change_status_and_show_status_label(self):
         pet = self.create_pet('Dog', status=Pet.FOR_ADOPTION)
-        self.client.post(reverse('meupet:change_status', args=[pet.id]))
+        self.client.post(reverse('meupet:change_status', args=[pet.slug]))
 
         response = self.client.get(reverse('meupet:index'))
 
@@ -319,22 +301,41 @@ class MeuPetTest(TestCase):
 
         self.assertNotIn(pet, pets)
 
-    def test_shareonfacebook_command(self):
-        pet = self.create_pet('Dog', published=False)
-        link = {
-            'link': 'http://www.test.com/{}'.format(pet.get_absolute_url())
-        }
+    def test_get_pet_by_pk(self):
+        pet = self.create_pet('Pet')
 
-        mock = MagicMock()
-        mock.get_renewed_token.return_value = 'token'
-        mock.get_attachment.return_value = link
+        resp = self.client.get(reverse('meupet:detail', kwargs={'pk_or_slug': pet.id}))
 
-        cmd = Command()
+        self.assertEqual(200, resp.status_code)
+        self.assertContains(resp, 'Testing Pet')
 
-        cmd.get_attachment = mock.get_attachment
-        cmd.get_renewed_token = mock.get_renewed_token
+    def test_get_pet_by_slug(self):
+        pet = self.create_pet('Pet')
 
-        with patch('facebook.GraphAPI.put_wall_post') as mock:
-            cmd.handle()
+        resp = self.client.get(reverse('meupet:detail', kwargs={'pk_or_slug': pet.slug}))
 
-            mock.assert_called_once_with(pet.name, attachment=link)
+        self.assertEqual(200, resp.status_code)
+        self.assertContains(resp, 'Testing Pet')
+
+
+class PaginationListPetViewTest(MeuPetTestCase):
+    def setUp(self):
+        super(PaginationListPetViewTest, self).setUp()
+        self.pet = self.create_pet('First Kind')
+
+    def test_get_page_query_string(self):
+        resp = self.client.get(reverse('meupet:lost', args=[self.pet.kind_id]), {'page': 1})
+
+        self.assertContains(resp, 'Testing Pet')
+
+    def test_page_not_integer(self):
+        pets, _ = paginate_pets(Pet.objects.all(), 'page')
+
+        self.assertEqual(1, len(pets))
+        self.assertEqual('First Kind', pets[0].kind.kind)
+
+    def test_empty_page(self):
+        pets, _ = paginate_pets(Pet.objects.all(), 42)
+
+        self.assertEqual(1, len(pets))
+        self.assertEqual('First Kind', pets[0].kind.kind)

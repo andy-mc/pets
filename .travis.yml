@@ -1,0 +1,18 @@
+language: python
+addons:
+  postgresql: "9.4"
+services:
+  - postgresql
+python:
+  - "3.4"
+  - "3.5"
+install:
+  - pip install -r dev-requirements.txt
+  - pip install coveralls
+script:
+  - cd pets
+  - coverage run --rcfile=../.coveragerc manage.py test -v 3
+before_script:
+  - psql -U postgres -c 'create database pets;'
+after_success:
+  - coveralls
